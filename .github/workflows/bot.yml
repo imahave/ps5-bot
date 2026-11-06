@@ -1,0 +1,58 @@
+name: PS5 bot
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'   # cada 15 min (UTC)
+  workflow_dispatch:                # botón "Run workflow" para probar a mano
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: ps5-bot
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Restaurar base de datos
+        uses: actions/cache/restore@v4
+        with:
+          path: offers.db
+          key: offers-db-${{ github.run_id }}
+          restore-keys: offers-db-
+
+      - name: Revisar precios
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MAX_PRICE_THRESHOLD: '600000'
+          REQUEST_DELAY_MIN: '1.5'
+          REQUEST_DELAY_MAX: '4'
+        run: python main.py --once
+
+      - name: Guardar base de datos
+        if: always() && hashFiles('offers.db') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: offers.db
+          key: offers-db-${{ github.run_id }}
+
+      - name: Mantener activo el workflow
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/bot.yml/enable" || true
