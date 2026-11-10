@@ -14,11 +14,12 @@ from config import HARD_PRICE_CAP_CLP, MODEL_LABELS, TZ_CHILE, settings
 from database import OffersDB, now_utc_iso, should_notify
 from notifier import TelegramNotifier, esc
 from scraper import Offer, collect_offers, fmt_clp
+from weekly import maybe_send_weekly_summary
 
 log = logging.getLogger("ps5bot")
 
 
-async def run_check(db: OffersDB, notifier: TelegramNotifier) -> None:
+async def run_check(db: OffersDB, notifier: TelegramNotifier, force_summary: bool = False) -> None:
     scan_started = now_utc_iso()
     log.info("=== Iniciando revisión de precios ===")
     offers, ok_sources = await collect_offers(settings)
@@ -50,6 +51,11 @@ async def run_check(db: OffersDB, notifier: TelegramNotifier) -> None:
         n = db.mark_unseen_out_of_stock(src, scan_started)
         if n:
             log.info("%s: %s ofertas marcadas como agotadas", src, n)
+
+    try:
+        await maybe_send_weekly_summary(offers, notifier, ok_sources, force=force_summary)
+    except Exception as exc:  # noqa: BLE001 - el resumen nunca debe tumbar la revisión
+        log.error("Error en el resumen semanal: %s", exc)
 
     log.info("=== Revisión terminada: %s ofertas vistas, %s alertas, fuentes OK: %s ===",
              len(offers), sent, ", ".join(sorted(ok_sources)) or "ninguna")
@@ -87,8 +93,8 @@ async def main_async(args: argparse.Namespace) -> None:
         print("✅ Mensaje enviado" if ok else "❌ Falló el envío (revisa token / chat id)")
         return
 
-    if args.once:
-        await run_check(db, notifier)
+    if args.once or args.summary:
+        await run_check(db, notifier, force_summary=args.summary)
         return
 
     if settings.send_startup_message:
@@ -125,6 +131,8 @@ def main() -> None:
     parser.add_argument("--once", action="store_true", help="Ejecuta una sola revisión y sale")
     parser.add_argument("--dry-run", action="store_true",
                         help="No envía a Telegram; imprime los mensajes en consola")
+    parser.add_argument("--summary", action="store_true",
+                        help="Hace una revisión y envía el resumen semanal ahora (para probar)")
     parser.add_argument("--test-notify", action="store_true",
                         help="Envía un mensaje de prueba a Telegram y sale")
     args = parser.parse_args()
